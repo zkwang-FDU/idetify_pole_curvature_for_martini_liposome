@@ -179,78 +179,63 @@ if __name__ == "__main__":
         if surf:
             # 4. 边缘提取
             L, rim = extract_raw_largest_boundary(surf)
-            # =========================================================================
-            # 5. [双重修正版] 计算并可视化双曲率
-            # =========================================================================
-            print(f"\n[4/4] 计算表面曲率 (自动动态范围修正)...")
-
-            # 1. 计算原始数据
-            mean_vals = surf.curvature(curv_type='mean')
-            gauss_vals = surf.curvature(curv_type='gaussian')
-
-            # 必须赋值给 point_data 才能绘图
-            surf.point_data["Mean_Curvature"] = mean_vals
-            surf.point_data["Gaussian_Curvature"] = gauss_vals
-
-
-            # -------------------------------------------------------------------------
-            # 辅助函数：计算合适的 clim 范围 (排除 5% 的极值噪点)
-            # -------------------------------------------------------------------------
-            def get_robust_clim(data_array):
-                # 移除 NaN
-                data = data_array[~np.isnan(data_array)]
-                # 获取 5% 和 95% 分位点
-                p5 = np.percentile(data, 5)
-                p95 = np.percentile(data, 95)
-
-                # 找到绝对值较大的那个作为边界
-                limit = max(abs(p5), abs(p95))
-
-                # 防止完全平面的情况 (limit=0)
-                if limit < 1e-9:
-                    limit = 0.001
-
-                return limit, p5, p95
-
-
-            # -------------------------------------------------------------------------
-            # 2. 统计诊断
-            # -------------------------------------------------------------------------
-            m_lim, m_p5, m_p95 = get_robust_clim(mean_vals)
-            g_lim, g_p5, g_p95 = get_robust_clim(gauss_vals)
-
-            print(f"   [诊断 - 平均曲率] P5: {m_p5:.5f} | P95: {m_p95:.5f} -> 设定范围: +/- {m_lim:.5f}")
-            print(f"   [诊断 - 高斯曲率] P5: {g_p5:.6f} | P95: {g_p95:.6f} -> 设定范围: +/- {g_lim:.6f}")
-            print("   (注意：高斯曲率通常比平均曲率小 1-2 个数量级，这是正常的)")
 
             # =========================================================================
-            # 3. 可视化 (左右对比)
+            # 5. 新增：曲率计算
             # =========================================================================
-            pl = pv.Plotter(shape=(1, 2))
+            # =========================================================================
+            # 5. [修正版] 计算表面曲率
+            # =========================================================================
+            print(f"\n[4/4] 计算表面曲率...")
 
-            # --- 左图：平均曲率 (弯曲程度) ---
-            pl.subplot(0, 0)
-            pl.add_text(f"Mean Curvature\nRange: +/- {m_lim:.4f}", font_size=10)
-            # coolwarm: 红色=凸, 蓝色=凹, 白色=平
-            pl.add_mesh(surf, scalars="Mean_Curvature", cmap="coolwarm",
-                        clim=[-m_lim, m_lim], show_edges=False)
+            # PyVista 的 curvature() 方法返回的是 numpy 数组
+            # 我们需要手动将其通过字典方式赋值给 point_data，以便后续可视化调用
+
+            # 1. 计算平均曲率 (Mean Curvature)
+            mean_curv_values = surf.curvature(curv_type='mean')
+            surf.point_data["Mean_Curvature"] = mean_curv_values
+
+            # 2. 计算高斯曲率 (Gaussian Curvature)
+            gauss_curv_values = surf.curvature(curv_type='gaussian')
+            surf.point_data["Gaussian_Curvature"] = gauss_curv_values
+
+            # ... (接上文曲率计算代码)
+
+            mean_curv = surf.point_data["Mean_Curvature"]
+
+            # --- 诊断步骤：看看真实的数值分布 ---
+            print("\n[诊断] 曲率数值统计:")
+            # 忽略极端的边缘噪点，看中间90%的数据长什么样
+            p5 = np.percentile(mean_curv, 5)
+            p95 = np.percentile(mean_curv, 95)
+            print(f"      5% 分位点: {p5:.5f}")
+            print(f"      95% 分位点: {p95:.5f}")
+            print(f"      中位数: {np.median(mean_curv):.5f}")
+
+            # 如果 p95 只有 0.005，那你的 clim 就不能设为 0.1，而要设为 0.005
+
+            # --- 可视化修正 ---
+            pl = pv.Plotter()
+
+            # 关键技巧：设置 clim 为分位点范围，或者手动设一个很小的数
+            # 这样超过范围的强曲率（边缘）会饱和显示，而中间的微弱曲率会显现出来
+            bound_limit = max(abs(p5), abs(p95))
+
+            pl.add_text(f"Visualizing Range: +/- {bound_limit:.4f}", font_size=12)
+
+            pl.add_mesh(surf,
+                        scalars="Mean_Curvature",
+                        cmap="coolwarm",  # 蓝-白-红 配色
+                        clim=[-bound_limit, bound_limit],  # <--- 核心修改：缩窄范围！
+                        show_edges=False,
+                        label="Surface")
+
             if rim:
-                pl.add_mesh(rim, color="black", line_width=3, render_lines_as_tubes=True)
+                pl.add_mesh(rim, color="black", line_width=4, render_lines_as_tubes=True)
 
-            # --- 右图：高斯曲率 (几何形状) ---
-            pl.subplot(0, 1)
-            pl.add_text(f"Gaussian Curvature\nRange: +/- {g_lim:.5f}", font_size=10)
-            # RdBu_r (Red-Blue-Reversed):
-            # 红色 (>0) = 碗形/球形 (Elliptic)
-            # 蓝色 (<0) = 马鞍形 (Hyperbolic)
-            # 白色 (=0) = 平面/圆柱 (Parabolic)
-            pl.add_mesh(surf, scalars="Gaussian_Curvature", cmap="RdBu_r",
-                        clim=[-g_lim, g_lim], show_edges=False)
-            if rim:
-                pl.add_mesh(rim, color="black", line_width=3, render_lines_as_tubes=True)
-
-            pl.link_views()
+            pl.add_scalar_bar(title="Mean Curvature (1/A)")
             pl.show()
+
     except Exception as e:
         print(f"Err: {e}")
         import traceback
