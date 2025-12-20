@@ -156,7 +156,7 @@ def extract_raw_largest_boundary(surface_mesh):
 # =============================================================================
 if __name__ == "__main__":
     # --- 配置 ---
-    GRO_FILE = "60ns.gro"
+    GRO_FILE = "90ns.gro"
     ATOM_SELECTION = "name C4B or name C4A or name D3B or name D3A"
     MLS_RADIUS = 25.0
     BPA_RADII = [15.0,17.0,20.0]
@@ -181,15 +181,9 @@ if __name__ == "__main__":
             L, rim = extract_raw_largest_boundary(surf)
 
             # =========================================================================
-            # 5. 新增：曲率计算
-            # =========================================================================
-            # =========================================================================
-            # 5. [修正版] 计算表面曲率
+            # 5. [修正版] 计算表面曲率 & 输出核心统计指标
             # =========================================================================
             print(f"\n[4/4] 计算表面曲率...")
-
-            # PyVista 的 curvature() 方法返回的是 numpy 数组
-            # 我们需要手动将其通过字典方式赋值给 point_data，以便后续可视化调用
 
             # 1. 计算平均曲率 (Mean Curvature)
             mean_curv_values = surf.curvature(curv_type='mean')
@@ -199,36 +193,39 @@ if __name__ == "__main__":
             gauss_curv_values = surf.curvature(curv_type='gaussian')
             surf.point_data["Gaussian_Curvature"] = gauss_curv_values
 
-            # ... (接上文曲率计算代码)
+            # -------------------------------------------------------------------------
+            # >>> 新增：直接输出中位数统计 <<<
+            # -------------------------------------------------------------------------
+            median_mean = np.median(mean_curv_values)
+            median_gauss = np.median(gauss_curv_values)
 
-            mean_curv = surf.point_data["Mean_Curvature"]
+            print("\n" + "=" * 50)
+            print("【核心统计结果 / Key Statistics】")
+            print(f"  > 原始平均曲率中位数 (Median Mean Curvature):   {median_mean:.8f} (1/A)")
+            print(f"  > 原始高斯曲率中位数 (Median Gaussian Curvature): {median_gauss:.8f} (1/A^2)")
+            print("=" * 50 + "\n")
+            # -------------------------------------------------------------------------
 
-            # --- 诊断步骤：看看真实的数值分布 ---
-            print("\n[诊断] 曲率数值统计:")
+            # --- 诊断步骤：看看真实的数值分布 (用于确定可视化范围) ---
             # 忽略极端的边缘噪点，看中间90%的数据长什么样
-            p5 = np.percentile(mean_curv, 5)
-            p95 = np.percentile(mean_curv, 95)
-            print(f"      5% 分位点: {p5:.5f}")
-            print(f"      95% 分位点: {p95:.5f}")
-            print(f"      中位数: {np.median(mean_curv):.5f}")
+            p5 = np.percentile(mean_curv_values, 5)
+            p95 = np.percentile(mean_curv_values, 95)
 
-            # 如果 p95 只有 0.005，那你的 clim 就不能设为 0.1，而要设为 0.005
-
-            # --- 可视化修正 ---
+            # --- 可视化 ---
             pl = pv.Plotter()
 
             # 关键技巧：设置 clim 为分位点范围，或者手动设一个很小的数
             # 这样超过范围的强曲率（边缘）会饱和显示，而中间的微弱曲率会显现出来
             bound_limit = max(abs(p5), abs(p95))
 
-            pl.add_text(f"Visualizing Range: +/- {bound_limit:.4f}", font_size=12)
+            pl.add_text(f"Visualizing Range: +/- {bound_limit:.4f}\nMedian Mean: {median_mean:.4f}", font_size=12)
 
             pl.add_mesh(surf,
                         scalars="Mean_Curvature",
                         cmap="coolwarm",  # 蓝-白-红 配色
-                        clim=[-bound_limit, bound_limit],  # <--- 核心修改：缩窄范围！
+                        clim=[-bound_limit, bound_limit],
                         show_edges=False,
-                        label="Surface")
+                        label="Surface (Mean Curv)")
 
             if rim:
                 pl.add_mesh(rim, color="black", line_width=4, render_lines_as_tubes=True)
