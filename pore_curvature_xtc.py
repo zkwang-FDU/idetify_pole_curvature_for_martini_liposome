@@ -5,18 +5,17 @@ import networkx as nx
 from scipy.spatial import cKDTree
 import open3d as o3d
 import matplotlib.pyplot as plt
+from tqdm import tqdm  # 引入进度条库
 import os
 
 
 # =============================================================================
-# 1. 核心算法：MLS 投影 (逻辑保持原样，仅移除 Print)
+# 1. 核心算法：MLS 投影 (保持原样)
 # =============================================================================
 def project_points_to_midplane(points, radius=20.0, iterations=10):
     current_points = points.copy()
     n_points = len(points)
     final_normals = np.zeros_like(points)
-
-    # print(f"\n[1/4] MLS 投影坍缩 (N={n_points}, R={radius})...")
 
     for it in range(iterations):
         tree = cKDTree(current_points)
@@ -49,22 +48,19 @@ def project_points_to_midplane(points, radius=20.0, iterations=10):
         current_points[valid_mask] = new_positions[valid_mask]
         final_normals[valid_mask] = current_normals[valid_mask]
 
-        # print(f"      Iter {it+1}: 平均位移 = {shift:.4f} A")
         if shift < 0.05: break
 
     return current_points, final_normals
 
 
 # =============================================================================
-# 2. 核心算法：BPA 构网 (逻辑保持原样，仅移除 Print)
+# 2. 核心算法：BPA 构网 (保持原样)
 # =============================================================================
 def mesh_using_ball_pivoting(points, normals, bpa_radii):
-    # print(f"\n[2/4] BPA 滚球法构网...")
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     pcd.normals = o3d.utility.Vector3dVector(normals)
 
-    # 保持法向一致性
     pcd.orient_normals_consistent_tangent_plane(k=15)
 
     radii = o3d.utility.DoubleVector(bpa_radii)
@@ -79,20 +75,15 @@ def mesh_using_ball_pivoting(points, normals, bpa_radii):
     faces = np.hstack([np.full((len(triangles), 1), 3), triangles]).flatten()
     pv_mesh = pv.PolyData(vertices, faces)
     pv_mesh = pv_mesh.clean()
-
-    # 移除离散的小碎片，只保留最大的那个曲面
     pv_mesh = pv_mesh.connectivity(largest=True)
 
     return pv_mesh
 
 
 # =============================================================================
-# 3. 核心算法：原始边缘提取 (逻辑保持原样，仅移除 Print)
+# 3. 核心算法：原始边缘提取 (保持原样)
 # =============================================================================
 def extract_raw_largest_boundary(surface_mesh):
-    # print(f"\n[3/4] 提取原始最大边缘...")
-
-    # 1. 提取所有边缘
     edges = surface_mesh.extract_feature_edges(boundary_edges=True,
                                                feature_edges=False,
                                                manifold_edges=False)
@@ -101,7 +92,6 @@ def extract_raw_largest_boundary(surface_mesh):
     if edges.n_lines == 0:
         return 0.0, None
 
-    # 2. 构建图
     lines = edges.lines
     points = edges.points
     G = nx.Graph()
@@ -114,7 +104,6 @@ def extract_raw_largest_boundary(surface_mesh):
         G.add_edge(p1_idx, p2_idx, weight=dist)
         i += 3
 
-    # 3. 分离连通分量
     comps = list(nx.connected_components(G))
 
     max_perimeter = 0.0
@@ -131,7 +120,6 @@ def extract_raw_largest_boundary(surface_mesh):
     if not best_edges:
         return 0.0, None
 
-    # 4. 重建原始 PolyData (为了保持返回值一致，虽然纯计算不需要Mesh对象，但保持算法结构)
     lines_flat = []
     for u, v in best_edges:
         lines_flat.extend([2, u, v])
@@ -142,101 +130,109 @@ def extract_raw_largest_boundary(surface_mesh):
 
 
 # =============================================================================
-# 4. 批量处理与绘图主程序
+# 4. 主程序：支持 tqdm 和 实时保存
 # =============================================================================
 if __name__ == "__main__":
     # --- 配置 ---
-    GRO_FILE = "ref.gro"  # 拓扑文件
-    XTC_FILE = "traj.xtc"  # 轨迹文件
+    GRO_FILE = "0ns.gro"
+    XTC_FILE = "nojump.xtc"
     ATOM_SELECTION = "name C4B or name C4A or name D3B or name D3A"
 
-    # 算法参数
     MLS_RADIUS = 25.0
     BPA_RADII = [15.0, 17.0, 20.0]
 
-    # 输出文件名
     OUT_PERIMETER = "data_perimeter.txt"
     OUT_MEAN_CURV = "data_mean_curvature.txt"
     OUT_GAUSS_CURV = "data_gaussian_curvature.txt"
 
-    # 数据容器
-    time_list = []
-    perimeter_list = []
-    mean_curv_median_list = []
-    gauss_curv_median_list = []
-
-    print(f"开始处理轨迹: {XTC_FILE} ...")
+    # 用于绘图的内存缓存
+    plot_time = []
+    plot_perimeter = []
+    plot_mean = []
+    plot_gauss = []
 
     try:
-        # 加载 Universe
+        print(f"Loading Universe: {GRO_FILE} | {XTC_FILE}")
         u = mda.Universe(GRO_FILE, XTC_FILE)
         atoms = u.select_atoms(ATOM_SELECTION)
 
-        total_frames = len(u.trajectory)
+        # 1. 打开文件句柄 (Write mode)
+        f_p = open(OUT_PERIMETER, "w")
+        f_m = open(OUT_MEAN_CURV, "w")
+        f_g = open(OUT_GAUSS_CURV, "w")
 
-        for ts in u.trajectory:
+        # 2. 写入表头
+        f_p.write("# Time(ps) Perimeter(A)\n")
+        f_m.write("# Time(ps) Median_Mean_Curvature(1/A)\n")
+        f_g.write("# Time(ps) Median_Gaussian_Curvature(1/A^2)\n")
+
+        print("Start processing trajectory...")
+
+        # 3. 循环遍历 (使用 tqdm 显示进度条)
+        # total=u.trajectory.n_frames 帮助 tqdm 预估剩余时间
+        for ts in tqdm(u.trajectory, total=u.trajectory.n_frames, unit="frame"):
             current_time = ts.time
-            frame_idx = ts.frame
-
-            # 简单的进度提示
-            if frame_idx % 10 == 0:
-                print(f"Processing Frame {frame_idx}/{total_frames} (Time: {current_time:.1f} ps)...")
-
             points = atoms.positions
 
-            # --- 步骤 1: MLS ---
-            collapsed, normals = project_points_to_midplane(points, MLS_RADIUS)
+            # --- 算法执行 ---
+            try:
+                # A. MLS
+                collapsed, normals = project_points_to_midplane(points, MLS_RADIUS)
 
-            # --- 步骤 2: BPA ---
-            surf = mesh_using_ball_pivoting(collapsed, normals, BPA_RADII)
+                # B. Mesh
+                surf = mesh_using_ball_pivoting(collapsed, normals, BPA_RADII)
 
-            # 初始化当前帧结果 (默认 0 或 NaN)
-            L = 0.0
-            med_mean = 0.0
-            med_gauss = 0.0
+                L = 0.0
+                med_mean = 0.0
+                med_gauss = 0.0
 
-            if surf is not None and surf.n_points > 0:
-                # --- 步骤 3: 边缘提取 ---
-                L, _ = extract_raw_largest_boundary(surf)
+                if surf is not None and surf.n_points > 0:
+                    # C. 边缘提取
+                    L, _ = extract_raw_largest_boundary(surf)
 
-                # --- 步骤 4: 曲率计算 ---
-                # 平均曲率
-                k_mean = surf.curvature(curv_type='mean')
-                med_mean = np.median(k_mean) if len(k_mean) > 0 else 0.0
+                    # D. 曲率
+                    k_mean = surf.curvature(curv_type='mean')
+                    if len(k_mean) > 0:
+                        med_mean = np.median(k_mean)
 
-                # 高斯曲率
-                k_gauss = surf.curvature(curv_type='gaussian')
-                med_gauss = np.median(k_gauss) if len(k_gauss) > 0 else 0.0
+                    k_gauss = surf.curvature(curv_type='gaussian')
+                    if len(k_gauss) > 0:
+                        med_gauss = np.median(k_gauss)
 
-            # 记录数据
-            time_list.append(current_time)
-            perimeter_list.append(L)
-            mean_curv_median_list.append(med_mean)
-            gauss_curv_median_list.append(med_gauss)
+            except Exception as e_inner:
+                # 如果某一帧算法出错，记录为 0 并继续，不要中断整个程序
+                # print(f"Frame {ts.frame} error: {e_inner}")
+                L, med_mean, med_gauss = 0.0, 0.0, 0.0
+
+            # --- 核心：实时写入文件并刷新 ---
+            f_p.write(f"{current_time:.4f} {L:.4f}\n")
+            f_m.write(f"{current_time:.4f} {med_mean:.8f}\n")
+            f_g.write(f"{current_time:.4f} {med_gauss:.8f}\n")
+
+            # Flush 确保数据立即写入硬盘，防止断电数据丢失
+            f_p.flush()
+            f_m.flush()
+            f_g.flush()
+
+            # --- 添加到列表以便最后画图 ---
+            plot_time.append(current_time)
+            plot_perimeter.append(L)
+            plot_mean.append(med_mean)
+            plot_gauss.append(med_gauss)
+
+        # 4. 关闭文件
+        f_p.close()
+        f_m.close()
+        f_g.close()
+
+        print("\nCalculation finished. Data saved. Generating plots...")
 
         # =====================================================================
-        # 保存数据到文件
+        # 绘图
         # =====================================================================
-        data_arr = np.array([time_list, perimeter_list, mean_curv_median_list, gauss_curv_median_list]).T
-
-        # 分别保存
-        np.savetxt(OUT_PERIMETER, np.column_stack((time_list, perimeter_list)),
-                   header="Time(ps) Perimeter(A)", fmt="%.4f")
-
-        np.savetxt(OUT_MEAN_CURV, np.column_stack((time_list, mean_curv_median_list)),
-                   header="Time(ps) Median_Mean_Curvature(1/A)", fmt="%.8f")
-
-        np.savetxt(OUT_GAUSS_CURV, np.column_stack((time_list, gauss_curv_median_list)),
-                   header="Time(ps) Median_Gaussian_Curvature(1/A^2)", fmt="%.8f")
-
-        print("\n计算完成。数据已保存。正在绘图...")
-
-        # =====================================================================
-        # 绘图 (Matplotlib)
-        # =====================================================================
-        # 1. 周长图
+        # 图1: 周长
         plt.figure(figsize=(10, 6))
-        plt.plot(time_list, perimeter_list, color='black', linewidth=1.5)
+        plt.plot(plot_time, plot_perimeter, color='black', linewidth=1)
         plt.title("Pore Perimeter vs Time")
         plt.xlabel("Time (ps)")
         plt.ylabel("Perimeter ($\AA$)")
@@ -244,9 +240,9 @@ if __name__ == "__main__":
         plt.savefig("plot_perimeter.png", dpi=300)
         plt.close()
 
-        # 2. 平均曲率中位数图
+        # 图2: 平均曲率
         plt.figure(figsize=(10, 6))
-        plt.plot(time_list, mean_curv_median_list, color='blue', linewidth=1.5)
+        plt.plot(plot_time, plot_mean, color='blue', linewidth=1)
         plt.title("Median Mean Curvature vs Time")
         plt.xlabel("Time (ps)")
         plt.ylabel("Mean Curvature ($1/\AA$)")
@@ -254,9 +250,9 @@ if __name__ == "__main__":
         plt.savefig("plot_mean_curvature.png", dpi=300)
         plt.close()
 
-        # 3. 高斯曲率中位数图
+        # 图3: 高斯曲率
         plt.figure(figsize=(10, 6))
-        plt.plot(time_list, gauss_curv_median_list, color='red', linewidth=1.5)
+        plt.plot(plot_time, plot_gauss, color='red', linewidth=1)
         plt.title("Median Gaussian Curvature vs Time")
         plt.xlabel("Time (ps)")
         plt.ylabel("Gaussian Curvature ($1/\AA^2$)")
@@ -264,10 +260,11 @@ if __name__ == "__main__":
         plt.savefig("plot_gaussian_curvature.png", dpi=300)
         plt.close()
 
-        print("绘图完成: plot_perimeter.png, plot_mean_curvature.png, plot_gaussian_curvature.png")
+        print("All done!")
 
     except Exception as e:
-        print(f"发生错误: {e}")
+        print(f"\nCRITICAL ERROR: {e}")
         import traceback
 
         traceback.print_exc()
+        # 即使报错退出，由于前面用了 flush，已经跑完的帧数据依然在txt里
