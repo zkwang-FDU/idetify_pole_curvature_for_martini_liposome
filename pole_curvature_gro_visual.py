@@ -17,12 +17,14 @@ def project_points_to_midplane(points, radius=20.0, iterations=10):
     print(f"\n[1/4] MLS 投影坍缩 (N={n_points}, R={radius})...")
 
     for it in range(iterations):
+        start = time.perf_counter()
         tree = cKDTree(current_points)
         neighbors_list = tree.query_ball_point(current_points, r=radius)
         new_positions = np.zeros_like(current_points)
         valid_mask = np.zeros(n_points, dtype=bool)
         current_normals = np.zeros_like(current_points)
-
+        elapsed1 = time.perf_counter() - start
+        print(f"耗时: {elapsed1:.4f}秒")
         for i in range(n_points):
             idx = neighbors_list[i]
             if len(idx) < 5:
@@ -42,11 +44,14 @@ def project_points_to_midplane(points, radius=20.0, iterations=10):
             new_positions[i] = current_points[i] - dist * normal
             current_normals[i] = normal
             valid_mask[i] = True
+        elapsed1 = time.perf_counter() - start
+        print(f"{it}耗时: {elapsed1:.4f}秒")
 
         shift = np.linalg.norm(new_positions[valid_mask] - current_points[valid_mask], axis=1).mean()
         current_points[valid_mask] = new_positions[valid_mask]
         final_normals[valid_mask] = current_normals[valid_mask]
-
+        elapsed1 = time.perf_counter() - start
+        print(f"迭代{it}耗时: {elapsed1:.4f}秒")
         print(f"      Iter {it+1}: 平均位移 = {shift:.4f} A")
         if shift < 0.05: break
 
@@ -56,6 +61,7 @@ def project_points_to_midplane(points, radius=20.0, iterations=10):
 # 2. 核心算法：BPA 构网
 # =============================================================================
 def mesh_using_ball_pivoting(points, normals, bpa_radii):
+    start = time.perf_counter()
     print(f"\n[2/4] BPA 滚球法构网...")
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
@@ -79,7 +85,8 @@ def mesh_using_ball_pivoting(points, normals, bpa_radii):
 
     # 这一步非常重要：移除离散的小碎片，只保留最大的那个曲面
     pv_mesh = pv_mesh.connectivity(largest=True)
-
+    elapsed1 = time.perf_counter() - start
+    print(f"耗时: {elapsed1:.4f}秒")
     return pv_mesh
 
 # =============================================================================
@@ -89,6 +96,7 @@ def extract_raw_largest_boundary(surface_mesh):
     """
     只返回最长的那个连通边缘，不进行任何平滑或插值。
     """
+    start = time.perf_counter()
     print(f"\n[3/4] 提取原始最大边缘...")
 
     # 1. 提取所有边缘
@@ -148,7 +156,8 @@ def extract_raw_largest_boundary(surface_mesh):
 
     # 注意：这里必须使用 edges.points，因为 best_edges 里的索引是基于它的
     rim_mesh = pv.PolyData(points, lines=lines_flat)
-
+    elapsed1 = time.perf_counter() - start
+    print(f"耗时: {elapsed1:.4f}秒")
     return max_perimeter, rim_mesh
 
 # =============================================================================
@@ -156,7 +165,7 @@ def extract_raw_largest_boundary(surface_mesh):
 # =============================================================================
 if __name__ == "__main__":
     # --- 配置 ---
-    GRO_FILE = "90ns.gro"
+    GRO_FILE = "60ns.gro"
     ATOM_SELECTION = "name C4B or name C4A or name D3B or name D3A"
     MLS_RADIUS = 25.0
     BPA_RADII = [15.0,17.0,20.0]
@@ -173,8 +182,6 @@ if __name__ == "__main__":
 
         # 3. Mesh (BPA)
         surf = mesh_using_ball_pivoting(collapsed, normals, BPA_RADII)
-
-        # ... (接上文代码)
 
         if surf:
             # 4. 边缘提取
