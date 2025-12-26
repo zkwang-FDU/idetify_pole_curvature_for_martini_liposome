@@ -156,7 +156,7 @@ def extract_raw_largest_boundary(surface_mesh):
 # =============================================================================
 if __name__ == "__main__":
     # --- 配置 ---
-    GRO_FILE = "60ns.gro"
+    GRO_FILE = "90ns.gro"
     ATOM_SELECTION = "name C4B or name C4A or name D3B or name D3A"
     MLS_RADIUS = 25.0
     BPA_RADII = [15.0,17.0,20.0]

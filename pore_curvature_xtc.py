@@ -141,9 +141,9 @@ if __name__ == "__main__":
     MLS_RADIUS = 25.0
     BPA_RADII = [15.0, 17.0, 20.0]
 
-    OUT_PERIMETER = "data_perimeter.txt"
-    OUT_MEAN_CURV = "data_mean_curvature.txt"
-    OUT_GAUSS_CURV = "data_gaussian_curvature.txt"
+    OUT_PERIMETER = "data_perimeter_2.txt"
+    OUT_MEAN_CURV = "data_mean_curvature_2.txt"
+    OUT_GAUSS_CURV = "data_gaussian_curvature_2.txt"
 
     # 用于绘图的内存缓存
     plot_time = []
@@ -237,7 +237,7 @@ if __name__ == "__main__":
         plt.xlabel("Time (ps)")
         plt.ylabel("Perimeter ($\AA$)")
         plt.grid(True, linestyle='--', alpha=0.6)
-        plt.savefig("plot_perimeter.png", dpi=300)
+        plt.savefig("plot_perimeter_2.png", dpi=300)
         plt.close()
 
         # 图2: 平均曲率
@@ -247,7 +247,7 @@ if __name__ == "__main__":
         plt.xlabel("Time (ps)")
         plt.ylabel("Mean Curvature ($1/\AA$)")
         plt.grid(True, linestyle='--', alpha=0.6)
-        plt.savefig("plot_mean_curvature.png", dpi=300)
+        plt.savefig("plot_mean_curvature_2.png", dpi=300)
         plt.close()
 
         # 图3: 高斯曲率
@@ -257,7 +257,7 @@ if __name__ == "__main__":
         plt.xlabel("Time (ps)")
         plt.ylabel("Gaussian Curvature ($1/\AA^2$)")
         plt.grid(True, linestyle='--', alpha=0.6)
-        plt.savefig("plot_gaussian_curvature.png", dpi=300)
+        plt.savefig("plot_gaussian_curvature_2.png", dpi=300)
         plt.close()
 
         print("All done!")
